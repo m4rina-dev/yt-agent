@@ -1,0 +1,53 @@
+{
+    "title": "Bet365 Football Pre-Match 1X2 Input",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "competitions": {
+            "title": "Competitions",
+            "type": "array",
+            "description": "Bet365 competition identifiers (e.g. 'epl', 'laliga', 'serie-a'). If empty, scrapes all top competitions discovered from the football directory.",
+            "editor": "stringList",
+            "default": []
+        },
+        "oddsFormat": {
+            "title": "Odds format",
+            "type": "string",
+            "description": "Output format for odds values.",
+            "editor": "select",
+            "enum": ["decimal", "fractional", "american"],
+            "default": "decimal"
+        },
+        "maxFixtures": {
+            "title": "Max fixtures",
+            "type": "integer",
+            "description": "Hard cap on the number of fixtures to scrape per run. 0 means no cap.",
+            "default": 0,
+            "minimum": 0
+        },
+        "proxy": {
+            "title": "Proxy configuration",
+            "type": "object",
+            "description": "Apify proxy. Residential is strongly recommended for Bet365.",
+            "editor": "proxy",
+            "prefill": {
+                "useApifyProxy": true,
+                "apifyProxyGroups": ["RESIDENTIAL"]
+            }
+        },
+        "geoCountry": {
+            "title": "Geo country (ISO-3166 alpha-2)",
+            "type": "string",
+            "description": "Two-letter country code controlling Bet365 regional site (e.g. 'GB', 'DE', 'AU'). Different regions surface different markets.",
+            "editor": "textfield",
+            "default": "GB"
+        },
+        "debug": {
+            "title": "Debug logging",
+            "type": "boolean",
+            "description": "Enable verbose logging including raw protocol frames.",
+            "default": false
+        }
+    },
+    "required": ["proxy"]
+}
