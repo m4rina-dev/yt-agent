@@ -1,0 +1,41 @@
+{
+    "actorSpecification": 1,
+    "name": "bet365-football-odds",
+    "title": "Bet365 Football Pre-Match 1X2 Odds",
+    "description": "Scrapes Bet365 pre-match Full Time Result (1X2) odds for football fixtures. Supports decimal, fractional, and American odds formats.",
+    "version": "0.1",
+    "buildTag": "latest",
+    "meta": {
+        "templateId": "ts-crawlee-puppeteer-chrome"
+    },
+    "input": "./input_schema.json",
+    "dockerfile": "./Dockerfile",
+    "storages": {
+        "dataset": {
+            "actorSpecification": 1,
+            "title": "Football pre-match 1X2 odds",
+            "views": {
+                "overview": {
+                    "title": "Overview",
+                    "transformation": {
+                        "fields": [
+                            "fixtureId",
+                            "competition",
+                            "kickoffAt",
+                            "home",
+                            "away",
+                            "homeWin",
+                            "draw",
+                            "awayWin",
+                            "format",
+                            "scrapedAt"
+                        ]
+                    },
+                    "display": {
+                        "component": "table"
+                    }
+                }
+            }
+        }
+    }
+}
