@@ -2,22 +2,33 @@ import { EventEmitter } from 'node:events';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import WebSocket from 'ws';
 import { log } from 'crawlee';
-import { PROTOCOL } from './protocol-constants.js';
 import {
+    HOSTS,
+    TIMING,
+    buildOrigin,
+    buildWsUrl,
+    generateUid,
+    type HostProfile,
+} from './protocol-constants.js';
+import {
+    OUTBOUND_CODE,
     decodeFrames,
-    encodeHandshake,
-    encodeHeartbeat,
-    encodeSubscribe,
-    encodeUnsubscribe,
-    isHeartbeat,
-    isUpdate,
+    encodeOutbound,
     type Frame,
 } from './protocol.js';
 import type { SessionContext } from './session.js';
 
+export type Bet365Endpoint = keyof typeof HOSTS;
+
+export interface Bet365ClientOptions {
+    endpoint?: Bet365Endpoint;
+}
+
 export interface Bet365ClientEvents {
-    update: (frame: Frame) => void;
+    frame: (frame: Frame) => void;
+    snapshot: (frames: Frame[]) => void;
     open: () => void;
+    registered: (connectionId: string) => void;
     close: (code: number, reason: string) => void;
     error: (err: Error) => void;
 }
@@ -30,12 +41,16 @@ export declare interface Bet365Client {
 export class Bet365Client extends EventEmitter {
     private ws: WebSocket | null = null;
     private heartbeatTimer: NodeJS.Timeout | null = null;
-    private buffer = '';
-    private readonly subscriptions = new Set<string>();
+    private connectionId = '';
     private opened = false;
+    private readonly profile: HostProfile;
 
-    constructor(private readonly session: SessionContext) {
+    constructor(
+        private readonly session: SessionContext,
+        opts: Bet365ClientOptions = {},
+    ) {
         super();
+        this.profile = HOSTS[opts.endpoint ?? 'sportDirectory'];
     }
 
     async connect(): Promise<void> {
@@ -43,25 +58,29 @@ export class Bet365Client extends EventEmitter {
             ? new HttpsProxyAgent(this.session.proxyUrl)
             : undefined;
 
-        this.ws = new WebSocket(PROTOCOL.wsUrl, {
+        const url = buildWsUrl(this.profile, this.session.tld, generateUid());
+        const origin = buildOrigin(this.session.tld);
+        log.info(`Bet365 WS connect: ${url} (subprotocol=${this.profile.subprotocol})`);
+
+        this.ws = new WebSocket(url, [this.profile.subprotocol], {
             agent,
-            origin: PROTOCOL.httpOrigin,
+            origin,
             headers: {
                 Cookie: this.session.cookieHeader,
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+                'Accept-Language': 'en',
             },
         });
 
         await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(
                 () => reject(new Error('Bet365 WS handshake timeout')),
-                PROTOCOL.handshakeTimeoutMs,
+                TIMING.handshakeTimeoutMs,
             );
-
             this.ws!.once('open', () => {
                 clearTimeout(timeout);
-                this.ws!.send(encodeHandshake(this.session.wsToken));
                 this.opened = true;
-                this.startHeartbeat();
                 this.emit('open');
                 resolve();
             });
@@ -78,20 +97,17 @@ export class Bet365Client extends EventEmitter {
             this.emit('close', code, reason.toString('utf8'));
         });
         this.ws.on('error', (err) => this.emit('error', err));
+
+        await this.waitForSessionId();
+        this.register();
+        this.startHeartbeat();
     }
 
-    subscribe(topic: string): void {
+    /** Send an arbitrary outbound code (e.g. for subscription requests once
+     *  the format is reverse-engineered). */
+    send(payload: string): void {
         if (!this.opened || !this.ws) throw new Error('Bet365Client not connected');
-        if (this.subscriptions.has(topic)) return;
-        this.subscriptions.add(topic);
-        this.ws.send(encodeSubscribe(topic));
-        log.debug(`Bet365 subscribe: ${topic}`);
-    }
-
-    unsubscribe(topic: string): void {
-        if (!this.opened || !this.ws) return;
-        if (!this.subscriptions.delete(topic)) return;
-        this.ws.send(encodeUnsubscribe(topic));
+        this.ws.send(payload);
     }
 
     close(): void {
@@ -100,22 +116,35 @@ export class Bet365Client extends EventEmitter {
         this.ws = null;
     }
 
-    private onMessage(text: string): void {
-        this.buffer += text;
-        const lastTerminator = this.buffer.lastIndexOf(PROTOCOL.messageTerminator);
-        if (lastTerminator < 0) return;
-        const complete = this.buffer.slice(0, lastTerminator + 1);
-        this.buffer = this.buffer.slice(lastTerminator + 1);
-        for (const frame of decodeFrames(complete)) {
-            if (isHeartbeat(frame)) continue;
-            if (isUpdate(frame)) this.emit('update', frame);
-        }
+    private async waitForSessionId(): Promise<void> {
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(
+                () => reject(new Error('Bet365 session id not received')),
+                TIMING.sessionIdTimeoutMs,
+            );
+            const onFrame = (frame: Frame) => {
+                if (frame.kind === 'session' && frame.name) {
+                    this.connectionId = frame.name;
+                    clearTimeout(timeout);
+                    this.off('frame', onFrame);
+                    this.emit('registered', this.connectionId);
+                    resolve();
+                }
+            };
+            this.on('frame', onFrame);
+        });
+    }
+
+    private register(): void {
+        this.ws!.send(encodeOutbound(OUTBOUND_CODE.initial, this.connectionId));
+        log.debug(`Bet365 register sent: ${OUTBOUND_CODE.initial}${this.connectionId}`);
     }
 
     private startHeartbeat(): void {
         this.heartbeatTimer = setInterval(() => {
-            this.ws?.send(encodeHeartbeat());
-        }, PROTOCOL.heartbeatIntervalMs);
+            if (!this.connectionId || !this.ws) return;
+            this.ws.send(encodeOutbound(OUTBOUND_CODE.heartbeat, this.connectionId));
+        }, TIMING.heartbeatIntervalMs);
     }
 
     private stopHeartbeat(): void {
@@ -123,5 +152,12 @@ export class Bet365Client extends EventEmitter {
             clearInterval(this.heartbeatTimer);
             this.heartbeatTimer = null;
         }
+    }
+
+    private onMessage(text: string): void {
+        const frames = decodeFrames(text);
+        if (frames.length === 0) return;
+        if (frames[0]?.snapshot) this.emit('snapshot', frames);
+        for (const frame of frames) this.emit('frame', frame);
     }
 }

@@ -81,22 +81,52 @@ expected to dedupe by `fixtureId` + `scrapedAt`).
 
 ## Calibrating the protocol
 
-Bet365 doesn't publish their feed protocol; values in
-`src/bet365/protocol-constants.ts` are best-effort defaults. If the first run
-connects but receives no frames, capture a real session:
+Bet365 doesn't publish their feed protocol. The transport layer (URL pattern,
+hosts, subprotocols, origin) was confirmed from a real DevTools capture on
+2026-05-08 in the ES region:
 
-1. Chrome DevTools → Network → WS filter → load `bet365.com` → click into
-   football → pre-match.
-2. Copy the WSS URL, request headers, and the first ~20 frames in each
-   direction from the WebSocket "Messages" tab.
-3. Drop the capture into `captures/session-1.txt` (gitignored).
-4. Update `protocol-constants.ts` (`wsUrl`, `markers`, `topics`, delimiter
-   bytes) and field names in `scrapers/football-prematch.ts` (`NA`, `OD`, `FI`,
-   `BC`, etc.) to match what's in the real frames.
+| What                  | Value                                              |
+| --------------------- | -------------------------------------------------- |
+| Sport directory host  | `wss://premws-pt{N}.bet365.<tld>/zap/?uid=<rand>`  |
+| Main hub / per-match  | `wss://pshudws.bet365.<tld>/zap/?uid=<rand>`       |
+| Subprotocol (dir)     | `zap-protocol-v2`                                  |
+| Subprotocol (hub)     | `zap-protocol-v1`                                  |
+| Origin                | `https://www.bet365.<tld>` (must match)            |
+| Compression           | permessage-deflate (handled by `ws` automatically) |
 
-Everything bytes-level lives in **one file** (`protocol-constants.ts`) and
-field-name mappings live in **one file** (`scrapers/football-prematch.ts`).
-That's the deliberate v0.1 design: the discovery loop is short.
+The **frame-level format** was confirmed on 2026-05-08 from a `pshudws` v1
+match-page capture:
+
+- Server frames are plain text, comma-separated topic records.
+- A leading `#` on a frame marks it as a snapshot (initial state); deltas
+  drop the `#`.
+- Topic prefixes seen: `P_`, `P__`, `P-`, `PV_`, `PVG_`, `S_<connId>`,
+  `A_<authBlob>`.
+- Outbound: 25-byte `<3-digit-code><connId>` text. `101` = register,
+  `100` = heartbeat.
+
+What's still **best-effort and needs another capture** — specifically from
+the `premws-pt{N}` v2 directory feed with a fixture clicked through to its
+1X2 market:
+
+1. The exact subscription request format (how the client requests a topic).
+2. Per-fixture market field names — currently the code looks for
+   `NA`/`OD`/`FI`/`BC` etc. inside a `;`-separated payload. That field set
+   is a placeholder.
+
+To capture:
+
+1. Chrome DevTools → Network → WS filter, BEFORE loading bet365.es.
+2. Click Football → a pre-match league → click into one fixture.
+3. On the `premws-pt{N}` connection (subprotocol `zap-protocol-v2`), open
+   the "Messages" tab.
+4. Copy ~20 frames in each direction into
+   `captures/session-2.txt` (gitignored).
+
+After that capture, the only files that need updating are
+`src/bet365/protocol-constants.ts` (`TOPIC_PATTERNS`, possibly subscription
+opcodes) and `src/scrapers/football-prematch.ts` (field-name mapping in
+`parseDirectoryFrame` and `parseMarketFrame`).
 
 ## Roadmap
 

@@ -1,6 +1,6 @@
 import { gotScraping, type OptionsInit } from 'got-scraping';
 import { CookieJar } from 'tough-cookie';
-import { PROTOCOL } from './protocol-constants.js';
+import { buildOrigin, geoToTld } from './protocol-constants.js';
 
 export interface SessionContext {
     cookieJar: CookieJar;
@@ -8,6 +8,8 @@ export interface SessionContext {
     wsToken: string;
     proxyUrl?: string;
     geoCountry: string;
+    tld: string;
+    origin: string;
 }
 
 export interface SessionOptions {
@@ -19,6 +21,8 @@ export interface SessionOptions {
 const TOKEN_RE = /"pstk":"([^"]+)"|window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/;
 
 export async function createSession(opts: SessionOptions): Promise<SessionContext> {
+    const tld = geoToTld(opts.geoCountry);
+    const origin = buildOrigin(tld);
     const cookieJar = new CookieJar();
     const requestOptions: OptionsInit = {
         cookieJar,
@@ -32,19 +36,18 @@ export async function createSession(opts: SessionOptions): Promise<SessionContex
         timeout: { request: 30_000 },
     };
 
-    const homepage = await gotScraping(PROTOCOL.httpOrigin, requestOptions);
+    const homepage = await gotScraping(origin, requestOptions);
     if (homepage.statusCode >= 400) {
         throw new Error(`Bet365 homepage returned ${homepage.statusCode}`);
     }
 
     // Token is embedded in the bootstrap script. The exact field name has
     // historically been one of: pstk, _vis_opt_session, sessTok. If extraction
-    // fails, fall back to a synthetic token derived from the session cookie —
-    // some Bet365 routes accept this, others require the real one.
+    // fails, fall back to a synthetic token derived from the session cookie.
     const match = homepage.body.match(TOKEN_RE);
     const wsToken = match?.[1] ?? deriveTokenFromCookies(cookieJar);
 
-    const cookieHeader = await cookieJar.getCookieString(PROTOCOL.httpOrigin);
+    const cookieHeader = await cookieJar.getCookieString(origin);
 
     return {
         cookieJar,
@@ -52,6 +55,8 @@ export async function createSession(opts: SessionOptions): Promise<SessionContex
         wsToken,
         proxyUrl: opts.proxyUrl,
         geoCountry: opts.geoCountry,
+        tld,
+        origin,
     };
 }
 

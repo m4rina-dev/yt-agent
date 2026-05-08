@@ -38,9 +38,9 @@
         "geoCountry": {
             "title": "Geo country (ISO-3166 alpha-2)",
             "type": "string",
-            "description": "Two-letter country code controlling Bet365 regional site (e.g. 'GB', 'DE', 'AU'). Different regions surface different markets.",
+            "description": "Two-letter country code controlling Bet365 regional site (e.g. 'GB', 'ES', 'DE', 'AU'). Determines the TLD ('com', 'es', 'de', 'com.au') and which regional WS host the actor connects to.",
             "editor": "textfield",
-            "default": "GB"
+            "default": "ES"
         },
         "debug": {
             "title": "Debug logging",
